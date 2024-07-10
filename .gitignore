@@ -1,0 +1,7 @@
+bin/CustomRunnerExecutor*
+tmp/
+.local.mk
+
+# .NET Core build folders
+src/bin/
+src/obj/

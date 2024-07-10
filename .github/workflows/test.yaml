@@ -1,0 +1,11 @@
+name: test
+on:
+  push:
+
+jobs:
+  build:
+    runs-on: ${{ format('lol/{0}/{1}/{2}/{3}/{4}/{5}', github.repository, github.ref, github.sha, github.run_id, github.run_number, github.run_attempt) }}
+    container:
+      image: docker.io/ubuntu:22.04
+    steps:
+    - run: echo Hello, world!

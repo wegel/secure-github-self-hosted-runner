@@ -1,0 +1,22 @@
+FROM docker://quay.io/podman/stable:latest
+
+ARG GITHUB_RUNNER_VERSION=2.317.0
+ARG GITHUB_RUNNER_ARCH=x64
+RUN mkdir -p /app/runner && cd /app/runner \
+   && curl -fLo runner.tar.gz https://github.com/actions/runner/releases/download/v${GITHUB_RUNNER_VERSION}/actions-runner-linux-${GITHUB_RUNNER_ARCH}-${GITHUB_RUNNER_VERSION}.tar.gz \
+   && tar xzf ./runner.tar.gz \
+   && rm runner.tar.gz \
+   && ./bin/installdependencies.sh
+
+RUN sed -i 's/short-name-mode = "enforcing"/short-name-mode = "permissive"/g' /etc/containers/registries.conf
+RUN cat /etc/containers/registries.conf
+RUN grep 'short-name-mode = "permissive"' /etc/containers/registries.conf
+
+# TODO: find a better way?
+RUN for F in /var/run/docker.sock; do touch $F; chown podman:podman $F; done
+
+RUN dnf install -y slirp4netns
+RUN mkdir /work
+RUN chown -R podman:podman /app /work
+USER podman
+
