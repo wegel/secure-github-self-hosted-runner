@@ -1,7 +1,18 @@
 #!/bin/sh
 set -eu
 
-container_name="github-runner-${GITHUB_JOB_ID}-${GITHUB_JOB_SHORT_HASH}"
+github_run_id=$(echo $GITHUB_RUN | jq -r '.id')
+github_run_number=$(echo $GITHUB_RUN | jq -r '.run_number')
+github_run_attempt=$(echo $GITHUB_RUN | jq -r '.run_attempt')
+github_repository=$(echo $GITHUB_RUN | jq -r '.repository.full_name')
+github_sha=$(echo $GITHUB_RUN | jq -r '.head_sha')
+github_url=$(echo $GITHUB_RUN | jq -r '.repository.html_url')
+github_branch=$(echo $GITHUB_RUN | jq -r '.head_branch')
+
+github_job_id=$(echo $GITHUB_JOB | jq -r '.id')
+
+runner_name="sghr-${github_job_id}-${github_run_attempt}"
+container_name="github-runner-${github_job_id}-${github_run_attempt}"
 
 podman rm --force ${container_name} || true >/dev/null
 
@@ -12,12 +23,12 @@ podman run -d  --device /dev/net/tun --security-opt label=disable --user podman 
 podman wait --condition=running ${container_name} >/dev/null
 
 echo "Obtaining registration token..."
-export runner_token=$(./get_runner_registration_token)
+runner_token=$(./get_runner_registration_token)
 echo "Registration token obtained"
 
 podman exec -it ${container_name} /app/runner/config.sh \
-  --url ${GITHUB_URL} --token ${runner_token} --name ${RUNNER_NAME} --work /work --replace \
+  --url ${github_url} --token ${runner_token} --name ${runner_name} --work /work --replace \
   --unattended --ephemeral \
-  --labels lol/${GITHUB_REPOSITORY}/refs/heads/${GITHUB_BRANCH}/${GITHUB_SHA}/${GITHUB_RUN_ID}/${GITHUB_RUN_NUMBER}/${GITHUB_RUN_ATTEMPT}
+  --labels lol/${github_repository}/refs/heads/${github_branch}/${github_sha}/${github_run_id}/${github_run_number}/${github_run_attempt}
 
 echo "Container started and runner prepared"

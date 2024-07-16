@@ -19,20 +19,15 @@ let getGithubAppToken () =
 type WorkflowRun = {
     Id: int64
     CreatedAt: DateTime
-    Number: int
-    Attempt: int
-    Repository: string
-    SHA: string
-    HeadBranch: string
+    RawJson: string
 }
 
 type Job = {
     Id: int64
     RunId: int64
-    Name: string
     Status: string
-    CreatedAt: DateTime
-    Hash: string
+    Name: string
+    RawJson: string
 }
 
 type RateLimitInfo = {
@@ -108,11 +103,7 @@ let parseWorkflowRuns (logger: ILogger) (content: string) =
             {
                 Id = run.GetProperty("id").GetInt64()
                 CreatedAt = run.GetProperty("created_at").GetDateTime()
-                Number = run.GetProperty("run_number").GetInt32()
-                Attempt = run.GetProperty("run_attempt").GetInt32()
-                Repository = run.GetProperty("repository").GetProperty("full_name").GetString()
-                HeadBranch = run.GetProperty("head_branch").GetString()
-                SHA = run.GetProperty("head_sha").GetString()
+                RawJson = JsonSerializer.Serialize(run)
             })
         |> Seq.toArray
     logger.LogInformation("Parsed {RunCount} workflow runs", runs.Length)
@@ -122,21 +113,15 @@ let parseJobs (logger: ILogger) (content: string) =
     let json = JsonDocument.Parse(content)
     let jobsArray = json.RootElement.GetProperty("jobs")
     
-    let contentHash = 
-        use sha256 = SHA256.Create()
-        let hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(content))
-        Base58.Bitcoin.Encode(hashBytes)
-    
     let jobs = 
         jobsArray.EnumerateArray() 
         |> Seq.map (fun job -> 
             { 
                 Id = job.GetProperty("id").GetInt64()
                 RunId = job.GetProperty("run_id").GetInt64()
-                Name = job.GetProperty("name").GetString()
                 Status = job.GetProperty("status").GetString()
-                CreatedAt = job.GetProperty("created_at").GetDateTime()
-                Hash = contentHash
+                Name = job.GetProperty("name").GetString()
+                RawJson = JsonSerializer.Serialize(job)
             }) 
         |> Seq.toArray
     logger.LogInformation("Parsed {JobCount} jobs", jobs.Length)
@@ -274,7 +259,7 @@ let executeJob (logger: ILogger) (context: JobExecutionContext) =
         return success
     }
 
-let handlePendingJobs (logger: ILogger) run (jobs: Job[]) (executorConfig: ExecutorConfig) (owner: string) (repo: string) (ghToken: string) =
+let handlePendingJobs (logger: ILogger) (run: WorkflowRun) (jobs: Job[]) (executorConfig: ExecutorConfig) (owner: string) (repo: string) (ghToken: string) =
     task {
         let pendingJobs = jobs |> Array.filter (fun job -> job.Status = "queued" || job.Status = "in_progress")
         if pendingJobs.Length > 0 then
@@ -286,17 +271,8 @@ let handlePendingJobs (logger: ILogger) run (jobs: Job[]) (executorConfig: Execu
                 let envVars = Map [
                     "GITHUB_TOKEN", ghToken
                     "GITHUB_URL", $"https://github.com/{owner}/{repo}"
-                    "GITHUB_JOB_ID", job.Id.ToString()
-                    "GITHUB_RUN_ID", job.RunId.ToString()
-                    "GITHUB_RUN_NUMBER", run.Number.ToString()
-                    "GITHUB_RUN_ATTEMPT", run.Attempt.ToString()
-                    "GITHUB_JOB_NAME", job.Name
-                    "GITHUB_JOB_HASH", job.Hash
-                    "GITHUB_REPOSITORY", run.Repository
-                    "GITHUB_SHA", run.SHA
-                    "GITHUB_BRANCH", run.HeadBranch
-                    "GITHUB_JOB_HASH", job.Hash
-                    "GITHUB_JOB_SHORT_HASH", job.Hash.Substring(0, 8)
+                    "GITHUB_RUN", run.RawJson
+                    "GITHUB_JOB", job.RawJson
                     "RUNNER_NAME", $"runner-{job.Id}"
                     "RUNNER_WORK_DIRECTORY", $"_work_{job.Id}"
                     "SCRIPTS_DIR", executorConfig.BaseDirectory
