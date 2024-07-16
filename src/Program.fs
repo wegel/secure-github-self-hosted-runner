@@ -60,9 +60,13 @@ type JobExecutionContext = {
     ExecutorConfig: ExecutorConfig
 }
 
+type Message =
+    | AddJob of (unit -> Task<unit>)
+    | JobCompleted
+
 type SingleLineLogger(categoryName: string, minLevel: LogLevel) =
     let formatMessage (logLevel: LogLevel) (message: string) =
-        let shortLogLevel = 
+        let shortLogLevel =
             match logLevel with
             | LogLevel.Trace -> "TRCE"
             | LogLevel.Debug -> "DBUG"
@@ -94,12 +98,42 @@ type SingleLineLoggerProvider(minLevel: LogLevel) =
 let deserialize<'T> (json: string) =
     JsonSerializer.Deserialize<'T>(json, JsonSerializerOptions(PropertyNameCaseInsensitive = true))
 
+let createJobProcessor (logger: ILogger) (maxConcurrentJobs: int) =
+    MailboxProcessor.Start(fun inbox ->
+        let rec loop runningJobs queue = async {
+            match! inbox.Receive() with
+            | AddJob job when runningJobs < maxConcurrentJobs ->
+                Task.Run(new Func<Task>(fun () ->
+                    task {
+                        do! job()
+                        inbox.Post JobCompleted
+                    })) |> ignore
+                return! loop (runningJobs + 1) queue
+            | AddJob job ->
+                // Queue the job if at capacity
+                return! loop runningJobs (queue @ [job])
+            | JobCompleted ->
+                match queue with
+                | [] ->
+                    return! loop (runningJobs - 1) []
+                | nextJob :: remainingQueue ->
+                    // Start the next queued job
+                    Task.Run(new Func<Task>(fun () ->
+                        task {
+                            do! nextJob()
+                            inbox.Post JobCompleted
+                        })) |> ignore
+                    return! loop runningJobs remainingQueue
+        }
+        loop 0 []
+    )
+
 let parseWorkflowRuns (logger: ILogger) (content: string) =
     let json = JsonDocument.Parse(content)
     let workflowRuns = json.RootElement.GetProperty("workflow_runs")
-    let runs = 
+    let runs =
         workflowRuns.EnumerateArray()
-        |> Seq.map (fun run -> 
+        |> Seq.map (fun run ->
             {
                 Id = run.GetProperty("id").GetInt64()
                 CreatedAt = run.GetProperty("created_at").GetDateTime()
@@ -112,17 +146,17 @@ let parseWorkflowRuns (logger: ILogger) (content: string) =
 let parseJobs (logger: ILogger) (content: string) =
     let json = JsonDocument.Parse(content)
     let jobsArray = json.RootElement.GetProperty("jobs")
-    
-    let jobs = 
-        jobsArray.EnumerateArray() 
-        |> Seq.map (fun job -> 
-            { 
+
+    let jobs =
+        jobsArray.EnumerateArray()
+        |> Seq.map (fun job ->
+            {
                 Id = job.GetProperty("id").GetInt64()
                 RunId = job.GetProperty("run_id").GetInt64()
                 Status = job.GetProperty("status").GetString()
                 Name = job.GetProperty("name").GetString()
                 RawJson = JsonSerializer.Serialize(job)
-            }) 
+            })
         |> Seq.toArray
     logger.LogInformation("Parsed {JobCount} jobs", jobs.Length)
     jobs
@@ -135,9 +169,9 @@ let makeRequest (logger: ILogger) (client: HttpClient) (url: string) (etag: stri
         | None -> ()
 
         let! response = client.SendAsync(request)
-        let newEtag = 
-            response.Headers.ETag 
-            |> Option.ofObj 
+        let newEtag =
+            response.Headers.ETag
+            |> Option.ofObj
             |> Option.map (fun e -> e.Tag)
 
         if response.StatusCode = System.Net.HttpStatusCode.NotModified then
@@ -156,7 +190,7 @@ let getRecentWorkflowRuns (logger: ILogger) (client: HttpClient) (owner: string)
         client.DefaultRequestHeaders.Authorization <- new Headers.AuthenticationHeaderValue("token", accessToken)
 
         let! response = makeRequest logger client url etag
-        return 
+        return
             match response.Data with
             | Some content -> { Data = Some (parseWorkflowRuns logger content); Etag = response.Etag }
             | None -> { Data = None; Etag = response.Etag }
@@ -169,7 +203,7 @@ let getJobsForRun (logger: ILogger) (client: HttpClient) (owner: string) (repo: 
         client.DefaultRequestHeaders.Authorization <- new Headers.AuthenticationHeaderValue("token", accessToken)
 
         let! response = makeRequest logger client url etag
-        return 
+        return
             match response.Data with
             | Some content -> { Data = Some (parseJobs logger content); Etag = response.Etag }
             | None -> { Data = None; Etag = response.Etag }
@@ -180,27 +214,27 @@ let getRateLimitInfo (logger: ILogger) (client: HttpClient) (accessToken: string
         let url = "https://api.github.com/rate_limit"
         client.DefaultRequestHeaders.Authorization <- new Headers.AuthenticationHeaderValue("token", accessToken)
         let! response = client.GetStringAsync(url)
-        
+
         let rateLimitResponse = deserialize<{| Resources: {| Core: RateLimitInfo |} |}> response
         let rateLimit = rateLimitResponse.Resources.Core
-        
-        logger.LogTrace("Rate limit remaining: {Remaining}, reset time: {ResetTime}, limit: {Limit}", 
+
+        logger.LogTrace("Rate limit remaining: {Remaining}, reset time: {ResetTime}, limit: {Limit}",
                               rateLimit.Remaining, rateLimit.Reset, rateLimit.Limit)
         return rateLimit
     }
 
 let executeStage (logger: ILogger) (stage: ExecutorStage) (context: JobExecutionContext) =
     task {
-        let scriptPath = 
+        let scriptPath =
             match stage with
             | Prepare -> context.ExecutorConfig.PrepareScript
             | Run -> context.ExecutorConfig.RunScript
             | Cleanup -> context.ExecutorConfig.CleanupScript
 
         let fullPath = System.IO.Path.Combine(context.ExecutorConfig.BaseDirectory, scriptPath)
-        
+
         logger.LogInformation("Executing {Stage} stage for job {JobId}", stage, context.JobId)
-        
+
         let startInfo = new ProcessStartInfo()
         startInfo.FileName <- fullPath
         startInfo.UseShellExecute <- false
@@ -212,29 +246,29 @@ let executeStage (logger: ILogger) (stage: ExecutorStage) (context: JobExecution
         for KeyValue(key, value) in context.EnvironmentVariables do
             startInfo.EnvironmentVariables.[key] <- value
 
-        use process = new Process()
-        process.StartInfo <- startInfo
-        process.OutputDataReceived.Add(fun args -> 
-            if not (isNull args.Data) then 
+        use stageProcess = new Process()
+        stageProcess.StartInfo <- startInfo
+        stageProcess.OutputDataReceived.Add(fun args ->
+            if not (isNull args.Data) then
                 logger.LogInformation("[{Stage}] {Output}\r", stage, args.Data))
-        process.ErrorDataReceived.Add(fun args -> 
-            if not (isNull args.Data) then 
+        stageProcess.ErrorDataReceived.Add(fun args ->
+            if not (isNull args.Data) then
                 logger.LogInformation("[{Stage}] {Error}\r", stage, args.Data))
 
-        process.Start() |> ignore
-        process.BeginOutputReadLine()
-        process.BeginErrorReadLine()
-        do! process.WaitForExitAsync()
+        stageProcess.Start() |> ignore
+        stageProcess.BeginOutputReadLine()
+        stageProcess.BeginErrorReadLine()
+        do! stageProcess.WaitForExitAsync()
 
-        return process.ExitCode
+        return stageProcess.ExitCode
     }
 
 let executeJob (logger: ILogger) (context: JobExecutionContext) =
     task {
         let mutable success = true
-        
+
         // Execute Prepare stage
-        let! prepareExitCode = 
+        let! prepareExitCode =
             if success then
                 executeStage logger Prepare context
             else
@@ -259,34 +293,37 @@ let executeJob (logger: ILogger) (context: JobExecutionContext) =
         return success
     }
 
-let handlePendingJob (logger: ILogger) (run: WorkflowRun) (job: Job) (executorConfig: ExecutorConfig) (owner: string) (repo: string) (ghToken: string) =
-    task {
-        logger.LogInformation("Job ID: {JobId}, Name: {JobName}, Status: {JobStatus}, Run ID: {RunId}", 
-                              job.Id, job.Name, job.Status, job.RunId)
+let handlePendingJob (logger: ILogger) (jobProcessor: MailboxProcessor<Message>) (run: WorkflowRun) (job: Job) (executorConfig: ExecutorConfig) (owner: string) (repo: string) (ghToken: string) =
+    let jobExecution = fun () ->
+        task {
+            logger.LogInformation("Job ID: {JobId}, Name: {JobName}, Status: {JobStatus}, Run ID: {RunId}",
+                                  job.Id, job.Name, job.Status, job.RunId)
 
-        let envVars = Map [
-            "GITHUB_TOKEN", ghToken
-            "GITHUB_URL", $"https://github.com/{owner}/{repo}"
-            "GITHUB_RUN", run.RawJson
-            "GITHUB_JOB", job.RawJson
-            "RUNNER_NAME", $"runner-{job.Id}"
-            "RUNNER_WORK_DIRECTORY", $"_work_{job.Id}"
-            "SCRIPTS_DIR", executorConfig.BaseDirectory
-        ]
+            let envVars = Map [
+                "GITHUB_TOKEN", ghToken
+                "GITHUB_URL", $"https://github.com/{owner}/{repo}"
+                "GITHUB_RUN", run.RawJson
+                "GITHUB_JOB", job.RawJson
+                "RUNNER_NAME", $"runner-{job.Id}"
+                "RUNNER_WORK_DIRECTORY", $"_work_{job.Id}"
+                "SCRIPTS_DIR", executorConfig.BaseDirectory
+            ]
 
-        let context = {
-            JobId = job.Id
-            RunId = job.RunId
-            EnvironmentVariables = envVars
-            ExecutorConfig = executorConfig
+            let context = {
+                JobId = job.Id
+                RunId = job.RunId
+                EnvironmentVariables = envVars
+                ExecutorConfig = executorConfig
+            }
+
+            let! success = executeJob logger context
+            if success then
+                logger.LogInformation("Job {JobId} executed successfully", job.Id)
+            else
+                logger.LogError("Job {JobId} execution failed", job.Id)
         }
 
-        let! success = executeJob logger context
-        if success then
-            logger.LogInformation("Job {JobId} executed successfully", job.Id)
-        else
-            logger.LogError("Job {JobId} execution failed", job.Id)
-    }
+    jobProcessor.Post(AddJob jobExecution)
 
 let waitForRateLimit (logger: ILogger) (rateLimit: RateLimitInfo) =
     task {
@@ -299,8 +336,9 @@ let waitForRateLimit (logger: ILogger) (rateLimit: RateLimitInfo) =
             do! Task.Delay 1000
     }
 
-let pollGitHub (logger: ILogger) (client: HttpClient) (owner: string) (repo: string) (accessToken: string) (executorConfig: ExecutorConfig) =
+let pollGitHub (logger: ILogger) (client: HttpClient) (owner: string) (repo: string) (accessToken: string) (executorConfig: ExecutorConfig) (maxConcurrentJobs: int) =
     task {
+        let jobProcessor = createJobProcessor logger maxConcurrentJobs
         let etagStore = Dictionary<string, string>()
         let mutable lastKnownRuns: WorkflowRun[] option = None
 
@@ -313,24 +351,24 @@ let pollGitHub (logger: ILogger) (client: HttpClient) (owner: string) (repo: str
             | Some etag -> etagStore.[runsUrl] <- etag
             | None -> ()
 
-            let currentRuns = 
+            let currentRuns =
                 match runsResponse.Data with
-                | Some runs -> 
+                | Some runs ->
                     lastKnownRuns <- Some runs
                     runs
-                | None -> 
+                | None ->
                     match lastKnownRuns with
-                    | Some runs -> 
+                    | Some runs ->
                         logger.LogTrace("No changes in workflow runs, using last known runs.")
                         runs
-                    | None -> 
+                    | None ->
                         logger.LogWarning("No workflow run data available.")
                         Array.empty
 
             for run in currentRuns do
                 let jobsUrl = sprintf "https://api.github.com/repos/%s/%s/actions/runs/%d/jobs" owner repo run.Id
                 let! jobsResponse = getJobsForRun logger client owner repo run.Id accessToken (etagStore.TryGetValue(jobsUrl) |> snd |> Some)
-                
+
                 match jobsResponse.Etag with
                 | Some etag -> etagStore.[jobsUrl] <- etag
                 | None -> ()
@@ -341,14 +379,14 @@ let pollGitHub (logger: ILogger) (client: HttpClient) (owner: string) (repo: str
                     if pendingJobs.Length > 0 then
                         logger.LogInformation("Found {PendingJobCount} pending jobs:", pendingJobs.Length)
                         for job in pendingJobs do
-                            handlePendingJob logger run job executorConfig owner repo accessToken
+                            handlePendingJob logger jobProcessor run job executorConfig owner repo accessToken
 
-                | None -> 
+                | None ->
                     logger.LogInformation("No new job data for run {RunId}.", run.Id)
 
                 let! rateLimit = getRateLimitInfo logger client accessToken
                 logger.LogTrace("Rate Limit Remaining: {RemainingLimit}", rateLimit.Remaining)
-                logger.LogTrace("Rate Limit Reset Time: {ResetTime}", 
+                logger.LogTrace("Rate Limit Reset Time: {ResetTime}",
                     DateTimeOffset.FromUnixTimeSeconds(rateLimit.Reset).ToString("yyyy-MM-dd HH:mm:ss"))
                 do! waitForRateLimit logger rateLimit
 
@@ -359,34 +397,49 @@ let pollGitHub (logger: ILogger) (client: HttpClient) (owner: string) (repo: str
 [<EntryPoint>]
 let main argv =
     match argv with
-    | [| repoUrl; baseScriptDir |] ->
+    | [| repoUrl; baseScriptDir |]
+    | [| repoUrl; baseScriptDir; _ |] ->
         let loggerFactory = LoggerFactory.Create(fun builder ->
             builder.AddProvider(new SingleLineLoggerProvider(LogLevel.Information))
                    .SetMinimumLevel(LogLevel.Information)
             |> ignore
         )
         let logger = loggerFactory.CreateLogger("GitHubPoller")
-        
+
         logger.LogInformation("Starting GitHub poller...")
         let owner, repo = parseRepoUrl repoUrl
         let accessToken = getGithubAppToken()
         logger.LogInformation("Polling repository: {Owner}/{Repo}", owner, repo)
         logger.LogInformation("Using scripts from directory: {ScriptDir}", baseScriptDir)
-        
+
+        let maxConcurrentJobs =
+            match argv with
+            | [| _; _; maxJobsStr |] ->
+                match Int32.TryParse(maxJobsStr) with
+                | true, value when value > 0 -> value
+                | _ ->
+                    logger.LogWarning("Invalid max concurrent jobs value. Using default of 5.")
+                    5
+            | _ ->
+                logger.LogInformation("Max concurrent jobs not specified. Using default of 5.")
+                5
+
+        logger.LogInformation("Max concurrent jobs: {MaxJobs}", maxConcurrentJobs)
+
         use client = new HttpClient()
         client.DefaultRequestHeaders.UserAgent.ParseAdd("FSharp-Poller")
-        
+
         let executorConfig = {
             PrepareScript = "prepare.sh"
             RunScript = "run.sh"
             CleanupScript = "cleanup.sh"
             BaseDirectory = baseScriptDir
         }
-        
-        pollGitHub logger client owner repo accessToken executorConfig
-        |> Async.AwaitTask 
+
+        pollGitHub logger client owner repo accessToken executorConfig maxConcurrentJobs
+        |> Async.AwaitTask
         |> Async.RunSynchronously
         0
     | _ ->
-        printfn "Usage: dotnet run <github-repo-url> <base-script-directory>"
+        printfn "Usage: dotnet run <github-repo-url> <base-script-directory> [max-concurrent-jobs]"
         1
