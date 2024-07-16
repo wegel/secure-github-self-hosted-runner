@@ -259,39 +259,33 @@ let executeJob (logger: ILogger) (context: JobExecutionContext) =
         return success
     }
 
-let handlePendingJobs (logger: ILogger) (run: WorkflowRun) (jobs: Job[]) (executorConfig: ExecutorConfig) (owner: string) (repo: string) (ghToken: string) =
+let handlePendingJob (logger: ILogger) (run: WorkflowRun) (job: Job) (executorConfig: ExecutorConfig) (owner: string) (repo: string) (ghToken: string) =
     task {
-        let pendingJobs = jobs |> Array.filter (fun job -> job.Status = "queued" || job.Status = "in_progress")
-        if pendingJobs.Length > 0 then
-            logger.LogInformation("Found {PendingJobCount} pending jobs:", pendingJobs.Length)
-            for job in pendingJobs do
-                logger.LogInformation("Job ID: {JobId}, Name: {JobName}, Status: {JobStatus}, Run ID: {RunId}", 
-                                      job.Id, job.Name, job.Status, job.RunId)
-                
-                let envVars = Map [
-                    "GITHUB_TOKEN", ghToken
-                    "GITHUB_URL", $"https://github.com/{owner}/{repo}"
-                    "GITHUB_RUN", run.RawJson
-                    "GITHUB_JOB", job.RawJson
-                    "RUNNER_NAME", $"runner-{job.Id}"
-                    "RUNNER_WORK_DIRECTORY", $"_work_{job.Id}"
-                    "SCRIPTS_DIR", executorConfig.BaseDirectory
-                ]
+        logger.LogInformation("Job ID: {JobId}, Name: {JobName}, Status: {JobStatus}, Run ID: {RunId}", 
+                              job.Id, job.Name, job.Status, job.RunId)
 
-                let context = {
-                    JobId = job.Id
-                    RunId = job.RunId
-                    EnvironmentVariables = envVars
-                    ExecutorConfig = executorConfig
-                }
+        let envVars = Map [
+            "GITHUB_TOKEN", ghToken
+            "GITHUB_URL", $"https://github.com/{owner}/{repo}"
+            "GITHUB_RUN", run.RawJson
+            "GITHUB_JOB", job.RawJson
+            "RUNNER_NAME", $"runner-{job.Id}"
+            "RUNNER_WORK_DIRECTORY", $"_work_{job.Id}"
+            "SCRIPTS_DIR", executorConfig.BaseDirectory
+        ]
 
-                let! success = executeJob logger context
-                if success then
-                    logger.LogInformation("Job {JobId} executed successfully", job.Id)
-                else
-                    logger.LogError("Job {JobId} execution failed", job.Id)
+        let context = {
+            JobId = job.Id
+            RunId = job.RunId
+            EnvironmentVariables = envVars
+            ExecutorConfig = executorConfig
+        }
+
+        let! success = executeJob logger context
+        if success then
+            logger.LogInformation("Job {JobId} executed successfully", job.Id)
         else
-            logger.LogInformation("No pending jobs found.")
+            logger.LogError("Job {JobId} execution failed", job.Id)
     }
 
 let waitForRateLimit (logger: ILogger) (rateLimit: RateLimitInfo) =
@@ -309,12 +303,12 @@ let pollGitHub (logger: ILogger) (client: HttpClient) (owner: string) (repo: str
     task {
         let etagStore = Dictionary<string, string>()
         let mutable lastKnownRuns: WorkflowRun[] option = None
-        
+
         while true do
             logger.LogTrace("Polling GitHub for workflow runs...")
             let runsUrl = sprintf "https://api.github.com/repos/%s/%s/actions/runs?status=queued" owner repo
             let! runsResponse = getRecentWorkflowRuns logger client owner repo accessToken (etagStore.TryGetValue(runsUrl) |> snd |> Some)
-            
+
             match runsResponse.Etag with
             | Some etag -> etagStore.[runsUrl] <- etag
             | None -> ()
@@ -342,11 +336,16 @@ let pollGitHub (logger: ILogger) (client: HttpClient) (owner: string) (repo: str
                 | None -> ()
 
                 match jobsResponse.Data with
-                | Some jobs -> 
-                    do! handlePendingJobs logger run jobs executorConfig owner repo accessToken
+                | Some jobs ->
+                    let pendingJobs = jobs |> Array.filter (fun job -> job.Status = "queued" || job.Status = "in_progress")
+                    if pendingJobs.Length > 0 then
+                        logger.LogInformation("Found {PendingJobCount} pending jobs:", pendingJobs.Length)
+                        for job in pendingJobs do
+                            handlePendingJob logger run job executorConfig owner repo accessToken
+
                 | None -> 
                     logger.LogInformation("No new job data for run {RunId}.", run.Id)
-                
+
                 let! rateLimit = getRateLimitInfo logger client accessToken
                 logger.LogTrace("Rate Limit Remaining: {RemainingLimit}", rateLimit.Remaining)
                 logger.LogTrace("Rate Limit Reset Time: {ResetTime}", 
