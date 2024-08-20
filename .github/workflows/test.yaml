@@ -8,4 +8,4 @@ jobs:
     container:
       image: docker.io/ubuntu:22.04
     steps:
-    - run: echo Hello, world!
+    - run: echo Hello, lol, world!
