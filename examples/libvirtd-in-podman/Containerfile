@@ -1,0 +1,15 @@
+FROM ubuntu:22.04
+
+RUN DEBIAN_FRONTEND=noninteractive apt update && apt install -y systemd curl wget cloud-image-utils qemu-kvm libvirt-daemon-system libvirt-clients \
+  bridge-utils virtinst libguestfs-tools iptables && apt clean
+
+RUN update-alternatives --set iptables /usr/sbin/iptables-legacy && \
+    update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy
+
+RUN useradd -m -s /bin/bash github-runner
+RUN systemctl enable libvirtd.service
+
+COPY qemu.conf /etc/libvirt/
+COPY vm_prepare.sh /app/
+
+CMD [ "/sbin/init" ]

@@ -1,6 +1,8 @@
 bin/CustomRunnerExecutor*
 tmp/
 .local.mk
+*.qcow2
+*.img
 
 # .NET Core build folders
 src/bin/
