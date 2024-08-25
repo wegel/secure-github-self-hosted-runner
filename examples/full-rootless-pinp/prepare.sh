@@ -16,7 +16,9 @@ container_name="github-runner-${github_job_id}-${github_run_attempt}"
 
 podman rm --force ${container_name} || true >/dev/null
 
-podman run -d  --device /dev/net/tun --security-opt label=disable --user podman --name ${container_name} \
+podman run -td -h nex-builder --security-opt label=disable \
+  --device /dev/net/tun --device /dev/fuse \
+  --user podman --name ${container_name} \
   -v $(pwd)/fake-docker:/usr/bin/docker \
      localhost/examples-full-rootless-pinp:latest tail -f /dev/null
 
