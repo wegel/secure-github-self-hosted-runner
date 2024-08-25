@@ -13,7 +13,7 @@ github_job_id=$(echo $GITHUB_JOB | jq -r '.id')
 
 runner_name="sghr-${github_job_id}-${github_run_attempt}"
 container_name="github-runner-${github_job_id}-${github_run_attempt}"
-container_image_name=localhost/examples-libvirtd-in-podman:latest
+container_image_name=localhost/executors-libvirtd-in-podman:latest
 
 libvirt_dir=${LIBVIRT_DIR:-$(pwd)}
 

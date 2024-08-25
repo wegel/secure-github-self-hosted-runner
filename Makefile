@@ -1,7 +1,7 @@
 
 .ONESHELL:
 ROOT_DIR := $(dir $(realpath $(lastword $(MAKEFILE_LIST))))
-SCRIPTS_DIR ?= examples/full-rootless-pinp
+SCRIPTS_DIR ?= executors/full-rootless-pinp
 IMAGE_NAME ?= $(shell echo "$(SCRIPTS_DIR)" | tr '/' '-')
 
 sinclude $(ROOT_DIR)/.local.mk # You could define GITHUB_TOKEN in there, for example
