@@ -25,7 +25,7 @@ podman run -td --security-opt label=disable \
 podman wait --condition=running ${container_name} >/dev/null
 
 echo "Obtaining registration token..."
-runner_token=$(./get_runner_registration_token)
+runner_token=$(../../bin/get_runner_registration_token)
 echo "Registration token obtained"
 
 podman exec -it ${container_name} /app/runner/config.sh \
