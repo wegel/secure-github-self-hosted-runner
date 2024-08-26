@@ -20,7 +20,7 @@ podman run -td -h nex-builder --security-opt label=disable \
   --device /dev/net/tun --device /dev/fuse \
   --user podman --name ${container_name} \
   -v $(pwd)/fake-docker:/usr/bin/docker \
-     localhost/executors-full-rootless-pinp:latest tail -f /dev/null
+     localhost/executors-podman-in-podman:latest tail -f /dev/null
 
 podman wait --condition=running ${container_name} >/dev/null
 
