@@ -1,12 +1,20 @@
 #!/bin/sh
 set -eu
 
+base_image=${BASE_IMAGE:-Fedora-Cloud-Base-39-1.5.x86_64.qcow2,http://fedora.c3sl.ufpr.br/linux/releases/39/Cloud/x86_64/images/Fedora-Cloud-Base-39-1.5.x86_64.qcow2}
 image_name=${IMAGE_NAME:-fedora-39-worker-base.qcow2}
 root_password=${ROOT_PASSWORD:-$(cat /dev/urandom | tr -dc A-Za-z0-9 | head -c16)}
 image_size=${IMAGE_SIZE:-6G} # we just need enough to install the packages; we resize when we create the VM
 
 if [ -n "${VERBOSE:-}"]; then
 	echo "root_password: ${root_password}"
+fi
+
+base_image_path="$(echo "${base_image}" | cut -d, -f1)"
+base_image_url="$(echo "${base_image}" | cut -d, -f2)"
+if [ ! -e "${base_image_path}" ]; then
+	echo "Downloading ${base_image_path} from ${base_image_url}"
+	wget -O "${base_image_path}" --server-response --max-redirect=10 --tries=3 "${base_image_url}" || echo "Download failed" >&2; exit 1
 fi
 
 podman build . -t base-worker-image-builder-base:latest
