@@ -11,7 +11,7 @@ github_branch=$(echo $GITHUB_RUN | jq -r '.head_branch')
 
 github_job_id=$(echo $GITHUB_JOB | jq -r '.id')
 
-runner_name="sghr-${github_job_id}-${github_run_attempt}"
+runner_name="shghr-${github_job_id}-${github_run_attempt}"
 container_name="github-runner-${github_job_id}-${github_run_attempt}"
 container_image_name=localhost/executors-libvirtd-in-podman:latest
 
@@ -36,6 +36,6 @@ podman exec -i ${container_name} \
     runner@${vm_ip} /home/runner/config.sh \
       --url ${github_url} --token ${runner_token} --name ${runner_name} --work /work --replace \
       --unattended --ephemeral \
-      --labels lol/${github_repository}/refs/heads/${github_branch}/${github_sha}/${github_run_id}/${github_run_number}/${github_run_attempt}
+      --labels shghr/${github_repository}/refs/heads/${github_branch}/${github_sha}/${github_run_id}/${github_run_number}/${github_run_attempt}
 
 echo "Container started and runner prepared"

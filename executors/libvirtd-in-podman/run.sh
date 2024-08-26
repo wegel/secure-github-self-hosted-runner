@@ -14,7 +14,7 @@ github_branch=$(echo $GITHUB_RUN | jq -r '.head_branch')
 
 github_job_id=$(echo $GITHUB_JOB | jq -r '.id')
 
-runner_name="sghr-${github_job_id}-${github_run_attempt}"
+runner_name="shghr-${github_job_id}-${github_run_attempt}"
 container_name="github-runner-${github_job_id}-${github_run_attempt}"
 
 VM_IP=$(podman exec -it -e VM_ID=${github_job_id}-${github_run_attempt} -e VM_IMAGE=fedora-39-worker-base.qcow2  ${container_name} cat /tmp/vm_data/ip | tr -d '\r')

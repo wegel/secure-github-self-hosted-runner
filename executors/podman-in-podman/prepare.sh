@@ -11,12 +11,12 @@ github_branch=$(echo $GITHUB_RUN | jq -r '.head_branch')
 
 github_job_id=$(echo $GITHUB_JOB | jq -r '.id')
 
-runner_name="sghr-${github_job_id}-${github_run_attempt}"
+runner_name="shghr-${github_job_id}-${github_run_attempt}"
 container_name="github-runner-${github_job_id}-${github_run_attempt}"
 
 podman rm --force ${container_name} || true >/dev/null
 
-podman run -td -h nex-builder --security-opt label=disable \
+podman run -td --security-opt label=disable \
   --device /dev/net/tun --device /dev/fuse \
   --user podman --name ${container_name} \
   -v $(pwd)/fake-docker:/usr/bin/docker \
@@ -31,6 +31,6 @@ echo "Registration token obtained"
 podman exec -it ${container_name} /app/runner/config.sh \
   --url ${github_url} --token ${runner_token} --name ${runner_name} --work /work --replace \
   --unattended --ephemeral \
-  --labels lol/${github_repository}/refs/heads/${github_branch}/${github_sha}/${github_run_id}/${github_run_number}/${github_run_attempt}
+  --labels shghr/${github_repository}/refs/heads/${github_branch}/${github_sha}/${github_run_id}/${github_run_number}/${github_run_attempt}
 
 echo "Container started and runner prepared"

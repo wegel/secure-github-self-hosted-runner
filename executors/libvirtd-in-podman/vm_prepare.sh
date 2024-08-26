@@ -15,7 +15,7 @@ ssh-keygen -t ed25519 -f "${data_dir}/id_ed25519" -N "" >/dev/null 2>&1
 # Create a cloud-init config file
 cat >"${data_dir}/cloud-init.yaml" <<EOF
 #cloud-config
-password: lalol1
+password: shghr
 chpasswd: { expire: False }
 ssh_pwauth: True
 users:

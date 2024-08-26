@@ -1,4 +1,6 @@
-# Secure GitHub Self-Hosted Runner
+# shghr (pronouned "Sugar")
+
+## (Secure) Self-hosted GitHub Runner
 
 ## The Problem
 
