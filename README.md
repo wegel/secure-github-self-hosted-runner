@@ -77,7 +77,7 @@ Additionally, the use of rootless podman in our executors ensures that the execu
 ## Getting Started
 
 ```
-GITHUB_TOKEN=mytoken REPO=https://github.com/owner/reponame make run
+EXECUTOR=executors/libvirtd-in-podman GITHUB_TOKEN=mytoken REPO=https://github.com/owner/reponame make run
 ```
 
 ## License
